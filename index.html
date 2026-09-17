@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Passport Photo Tool — personal use</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --green:#00703c; --red:#d4351c; --ink:#0b0c0c; --grey:#f3f2f1; }
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system, "Segoe UI", Arial, sans-serif; margin:0; color:var(--ink); background:#fff; }
+  header { background:var(--ink); color:#fff; padding:14px 24px; font-size:20px; font-weight:700; }
+  main { max-width:1100px; margin:0 auto; padding:24px; }
+  h2 { margin-top:0; }
+  .cols { display:flex; gap:32px; flex-wrap:wrap; }
+  .panel { flex:1 1 480px; }
+  ul.reqs { background:var(--grey); padding:16px 16px 16px 36px; border-left:6px solid var(--green); }
+  ul.reqs li { margin:6px 0; }
+  .stage { position:relative; width:100%; aspect-ratio:4/5; background:#222; overflow:hidden; border-radius:4px; }
+  video, canvas.out { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+  canvas.out { transform:none; }
+  svg.guide { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .controls { margin:16px 0; display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  button { font-size:16px; padding:10px 18px; border:0; border-radius:4px; cursor:pointer; }
+  button.primary { background:var(--green); color:#fff; font-weight:700; }
+  button.secondary { background:#dee0e2; }
+  button:disabled { opacity:.5; cursor:default; }
+  .countdown { position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+               font-size:120px; font-weight:800; color:#fff; text-shadow:0 0 18px rgba(0,0,0,.8); }
+  .status { min-height:24px; font-weight:600; }
+  .status.ok { color:var(--green); } .status.bad { color:var(--red); }
+  .checks { list-style:none; padding:0; }
+  .checks li { padding:4px 0; }
+  .checks li::before { content:"– "; color:#888; }
+  .checks li.pass::before { content:"✔ "; color:var(--green); font-weight:700; }
+  .checks li.fail::before { content:"✘ "; color:var(--red); font-weight:700; }
+  .note { font-size:14px; color:#505a5f; }
+  input[type=file] { font-size:14px; }
+  footer { padding:24px; text-align:center; color:#505a5f; font-size:13px; }
+</style>
+</head>
+<body>
+<header>Passport Photo Tool <span style="font-weight:400;font-size:14px">— runs 100% locally, nothing is uploaded anywhere</span></header>
+<main>
+  <div class="cols">
+    <div class="panel">
+      <h2>1 · Requirements (typical passport / visa digital photo)</h2>
+      <ul class="reqs">
+        <li>Plain, light-coloured background — no objects or people behind you</li>
+        <li>Even lighting, no shadows or glare on your face or behind you</li>
+        <li>Face the camera straight on, neutral expression, mouth closed, eyes open</li>
+        <li>Head, shoulders and upper body visible; head fills ~50–70% of image height</li>
+        <li>No sunglasses or tinted glasses; no hat (unless religious/medical)</li>
+        <li>No filters or edits; recent photo (taken in the last month)</li>
+        <li>Output: JPEG, portrait 3:4-ish; this tool exports <b>1200 × 1500 px</b> (well above the 600 × 750 minimum)</li>
+      </ul>
+      <h2>2 · Position yourself</h2>
+      <p>Fit your face inside the <b style="color:#00c781">green oval</b>, eyes on the dashed line, shoulders inside the bottom marks. Use the 5-second timer so you can step back and relax.</p>
+      <p class="note">Tip: stand ~1.5 m from a white/light wall, with a window or light in front of you (not behind).</p>
+      <h2>Or use an existing photo</h2>
+      <p><input type="file" id="file" accept="image/*"> <span class="note">It will be centre-cropped to 4:5 and re-encoded as JPEG.</span></p>
+    </div>
+
+    <div class="panel">
+      <h2>3 · Take the photo</h2>
+      <div class="stage" id="stage">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas class="out" id="out" style="display:none"></canvas>
+        <svg class="guide" id="guide" viewBox="0 0 400 500" preserveAspectRatio="none">
+          <!-- head oval: head should span ~50-70% of height -->
+          <ellipse cx="200" cy="205" rx="95" ry="140" fill="none" stroke="#00c781" stroke-width="3"/>
+          <!-- eye line -->
+          <line x1="60" y1="185" x2="340" y2="185" stroke="#fff" stroke-dasharray="8 8" stroke-width="2" opacity=".8"/>
+          <!-- shoulder marks -->
+          <path d="M40 470 Q200 380 360 470" fill="none" stroke="#fff" stroke-dasharray="6 10" stroke-width="2" opacity=".7"/>
+          <!-- top-of-head band 50-70% => head height 250-350px; with chin fixed near 345 -->
+        </svg>
+        <div class="countdown" id="cd">5</div>
+      </div>
+      <div class="controls">
+        <button class="primary" id="start">Start camera</button>
+        <button class="secondary" id="snap" disabled>Capture (5s timer)</button>
+        <button class="secondary" id="retake" style="display:none">Retake</button>
+        <button class="primary" id="save" style="display:none">Download JPEG</button>
+      </div>
+      <div class="status" id="status"></div>
+      <h2>4 · Auto-checks</h2>
+      <ul class="checks" id="checks">
+        <li id="c-res">Resolution ≥ 600 × 750 px</li>
+        <li id="c-bright">Overall brightness OK (not too dark / not blown out)</li>
+        <li id="c-bg">Background looks light and plain (top corners sampled)</li>
+        <li id="c-even">Lighting roughly even (left vs right)</li>
+      </ul>
+      <p class="note">These are heuristics to catch obvious problems — the official photo checker of whatever service you apply to has the final say. Face position, expression and glasses can't be auto-checked here.</p>
+    </div>
+  </div>
+</main>
+<footer>Personal-use helper generated locally. Photos never leave this computer until you upload the saved file yourself.</footer>
+
+<script>
+const OUT_W = 1200, OUT_H = 1500;                 // 4:5 portrait, > 600x750 minimum
+const video = document.getElementById('video');
+const out = document.getElementById('out');
+const cd = document.getElementById('cd');
+const statusEl = document.getElementById('status');
+const btnStart = document.getElementById('start');
+const btnSnap = document.getElementById('snap');
+const btnRetake = document.getElementById('retake');
+const btnSave = document.getElementById('save');
+const guide = document.getElementById('guide');
+let stream = null, lastBlob = null;
+
+function setStatus(msg, ok) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status ' + (ok === undefined ? '' : ok ? 'ok' : 'bad');
+}
+
+btnStart.onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: 'user' }, audio: false
+    });
+    video.srcObject = stream;
+    out.style.display = 'none'; video.style.display = ''; guide.style.display = '';
+    btnSnap.disabled = false; btnRetake.style.display = 'none'; btnSave.style.display = 'none';
+    setStatus('Camera on. Line up with the guides, then hit Capture.', true);
+  } catch (e) {
+    setStatus('Camera access failed: ' + e.message + ' — you can still use an existing photo below.', false);
+  }
+};
+
+btnSnap.onclick = async () => {
+  btnSnap.disabled = true;
+  cd.style.display = 'flex';
+  for (let i = 5; i > 0; i--) { cd.textContent = i; await new Promise(r => setTimeout(r, 1000)); }
+  cd.style.display = 'none';
+  capture();
+};
+
+function capture() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  // centre-crop the video frame to 4:5
+  let cw = vw, ch = vh;
+  if (cw / ch > OUT_W / OUT_H) cw = ch * OUT_W / OUT_H; else ch = cw * OUT_H / OUT_W;
+  const sx = (vw - cw) / 2, sy = (vh - ch) / 2;
+  out.width = OUT_W; out.height = OUT_H;
+  const ctx = out.getContext('2d');
+  // un-mirror: draw normally (video preview is mirrored via CSS only)
+  ctx.drawImage(video, sx, sy, cw, ch, 0, 0, OUT_W, OUT_H);
+  finishCapture();
+}
+
+document.getElementById('file').onchange = (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    let cw = img.width, ch = img.height;
+    if (cw / ch > OUT_W / OUT_H) cw = ch * OUT_W / OUT_H; else ch = cw * OUT_H / OUT_W;
+    const sx = (img.width - cw) / 2, sy = (img.height - ch) / 2;
+    const scaleOK = cw >= 600 && ch >= 750;
+    out.width = OUT_W; out.height = OUT_H;
+    out.getContext('2d').drawImage(img, sx, sy, cw, ch, 0, 0, OUT_W, OUT_H);
+    finishCapture(scaleOK ? null : 'Source image is small (' + Math.round(cw) + '×' + Math.round(ch) + ' after crop) — result may be upscaled.');
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(f);
+};
+
+function finishCapture(warn) {
+  video.style.display = 'none'; guide.style.display = 'none'; out.style.display = '';
+  btnRetake.style.display = ''; btnSave.style.display = '';
+  runChecks();
+  out.toBlob(b => { lastBlob = b; }, 'image/jpeg', 0.92);
+  setStatus(warn || 'Captured. Review the checks, then download.', !warn);
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+}
+
+btnRetake.onclick = () => { btnStart.onclick(); };
+
+btnSave.onclick = () => {
+  if (!lastBlob) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(lastBlob);
+  a.download = 'passport-photo-' + new Date().toISOString().slice(0,10) + '.jpg';
+  a.click();
+  setStatus('Saved to your downloads folder. Upload it wherever your application asks for a photo.', true);
+};
+
+function mark(id, pass) {
+  const li = document.getElementById(id);
+  li.classList.remove('pass','fail');
+  li.classList.add(pass ? 'pass' : 'fail');
+}
+
+function runChecks() {
+  const ctx = out.getContext('2d');
+  mark('c-res', out.width >= 600 && out.height >= 750);
+
+  const data = ctx.getImageData(0, 0, out.width, out.height).data;
+  let sum = 0, n = data.length / 4;
+  for (let i = 0; i < data.length; i += 4) sum += (data[i] + data[i+1] + data[i+2]) / 3;
+  const avg = sum / n;
+  mark('c-bright', avg > 70 && avg < 225);
+
+  // sample top corners for light plain background
+  function region(x0, y0, w, h) {
+    const d = ctx.getImageData(x0, y0, w, h).data;
+    let s = 0, sq = 0, m = d.length / 4;
+    for (let i = 0; i < d.length; i += 4) { const v = (d[i]+d[i+1]+d[i+2])/3; s += v; sq += v*v; }
+    const mean = s/m; return { mean, sd: Math.sqrt(Math.max(0, sq/m - mean*mean)) };
+  }
+  const w = out.width, h = out.height;
+  const tl = region(0, 0, Math.floor(w*0.18), Math.floor(h*0.18));
+  const tr = region(Math.floor(w*0.82), 0, Math.floor(w*0.18), Math.floor(h*0.18));
+  mark('c-bg', tl.mean > 150 && tr.mean > 150 && tl.sd < 40 && tr.sd < 40);
+
+  const left = region(0, Math.floor(h*0.25), Math.floor(w*0.12), Math.floor(h*0.5));
+  const right = region(Math.floor(w*0.88), Math.floor(h*0.25), Math.floor(w*0.12), Math.floor(h*0.5));
+  mark('c-even', Math.abs(left.mean - right.mean) < 45);
+}
+</script>
+</body>
+</html>
